@@ -942,8 +942,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length).decode()
-        params = parse_qs(body)
+        body_bytes = self.rfile.read(length) if length > 0 else b""
+        params = parse_qs(body_bytes.decode("utf-8", errors="replace"))
 
         if self.path == "/start":
             url = (params.get("url") or [""])[0].strip()
@@ -971,10 +971,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"job_id": job_id})
 
         elif self.path == "/cookies":
-            length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > MAX_COOKIES_SIZE:
                 self._json(413, {"error": f"file size must be 1..{MAX_COOKIES_SIZE} bytes"}); return
-            text = self.rfile.read(length).decode("utf-8", errors="replace")
+            text = body_bytes.decode("utf-8", errors="replace")
             if not is_valid_cookies_txt(text):
                 self._json(400, {"error": "doesn't look like a Netscape cookies.txt file"}); return
             COOKIES_FILE.write_text(text)
