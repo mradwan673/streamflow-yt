@@ -14,6 +14,7 @@ COPY server.py .
 ENV HOST=0.0.0.0 \
     PORT=10000 \
     STREAMFLOW_DIR=/data \
+    DEFAULT_BROWSER=none \
     PYTHONUNBUFFERED=1
 
 RUN mkdir -p /data

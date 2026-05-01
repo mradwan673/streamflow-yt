@@ -37,7 +37,9 @@ MERGER_RE = re.compile(r'^\[Merger\]\s+Merging formats into\s+"(.+)"$')
 PLAYLIST_ITEM_RE = re.compile(r"^\[download\]\s+Downloading item (\d+) of (\d+)")
 PLAYLIST_VIDEO_RE = re.compile(r"^\[download\]\s+Downloading video (\d+) of (\d+)")
 BOT_BLOCK_RE = re.compile(
-    r"sign in to confirm|not a bot|cookies-from-browser|http error 403",
+    r"sign in to confirm|not a bot|cookies-from-browser|http error 403"
+    r"|could not find .* cookies database|could not (?:read|load|copy) cookies"
+    r"|cookies are required|use --cookies",
     re.IGNORECASE,
 )
 
@@ -81,6 +83,9 @@ def is_valid_cookies_txt(text: str) -> bool:
 VIDEO_QUALITIES = {"best", "2160", "1440", "1080", "720", "480", "360"}
 AUDIO_QUALITIES = {"320", "256", "192", "128"}
 BROWSERS = {"none", "chrome", "safari", "firefox", "brave", "edge", "chromium", "opera", "vivaldi"}
+DEFAULT_BROWSER = os.environ.get("DEFAULT_BROWSER", "chrome")
+if DEFAULT_BROWSER not in BROWSERS:
+    DEFAULT_BROWSER = "none"
 
 
 def video_format(quality: str) -> str:
@@ -396,8 +401,8 @@ INDEX_HTML = r"""<!doctype html>
           <span class="text-xs text-slate-400" title="Reads cookies from your browser so the site recognises you as signed in">(use when the site asks you to sign in)</span>
         </label>
         <div class="select-wrap">
-          <select id="browser" class="w-full bg-white dark:bg-[#1d1f27] border border-slate-300 dark:border-[#424754] rounded-lg h-12 px-4 outline-none focus:border-blue-500 transition cursor-pointer">
-            <option value="chrome" selected>Chrome</option>
+          <select id="browser" class="w-full bg-white dark:bg-[#1d1f27] border border-slate-300 dark:border-[#424754] rounded-lg h-12 px-4 outline-none focus:border-blue-500 transition cursor-pointer" data-default="__DEFAULT_BROWSER__">
+            <option value="chrome">Chrome</option>
             <option value="safari">Safari</option>
             <option value="firefox">Firefox</option>
             <option value="brave">Brave</option>
@@ -650,6 +655,10 @@ function setKind(k) {
 tabSingle.onclick = () => setKind('single');
 tabPlaylist.onclick = () => setKind('playlist');
 
+const browserEl = document.getElementById('browser');
+browserEl.value = localStorage.getItem('browser') || browserEl.dataset.default || 'none';
+browserEl.addEventListener('change', () => localStorage.setItem('browser', browserEl.value));
+
 const modeEl = document.getElementById('mode');
 const qVideo = document.getElementById('qVideo');
 const qAudio = document.getElementById('qAudio');
@@ -883,7 +892,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
-            html = INDEX_HTML.replace("__DEFAULT_DIR__", json.dumps(str(DEFAULT_DIR)))
+            html = (INDEX_HTML
+                    .replace("__DEFAULT_DIR__", json.dumps(str(DEFAULT_DIR)))
+                    .replace("__DEFAULT_BROWSER__", DEFAULT_BROWSER))
             self._send(200, html.encode())
         elif self.path.startswith("/status"):
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
