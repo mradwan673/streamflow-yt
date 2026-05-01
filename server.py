@@ -385,8 +385,13 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <button id="pick" class="px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-white/5 rounded-md border border-slate-200 dark:border-[#424754] flex-shrink-0 transition">Change</button>
     </div>
-    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-      The file always lands in this folder on the host machine. After download finishes, tap <strong>Save here</strong> next to the file to copy it to <em>this device</em>.
+    <label class="mt-3 flex items-center gap-2 text-sm cursor-pointer select-none">
+      <input id="autoSave" type="checkbox" checked
+        class="w-4 h-4 rounded border-slate-300 dark:border-[#424754] text-blue-600 focus:ring-blue-500">
+      <span>Auto-save to <strong>this device</strong> when the file is ready</span>
+    </label>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+      A copy still lives on the host machine. Turn this off if you only want it stored on the host.
     </p>
   </div>
 
@@ -424,6 +429,18 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <script>
+// ----- helpers -----
+function triggerDownload(href, filename) {
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename || '';
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 2000);
+}
+
 // ----- theme -----
 const root = document.documentElement;
 const tIcon = document.getElementById('themeIcon');
@@ -581,9 +598,11 @@ document.getElementById('go').onclick = async () => {
       pl.textContent = `Item ${s.playlist.index} of ${s.playlist.count}`;
     }
     if (s.files && s.files.length > lastFiles) {
+      const autoSave = document.getElementById('autoSave').checked;
       for (let i = lastFiles; i < s.files.length; i++) {
         const path = s.files[i];
         const fname = path.split('/').pop();
+        const href = '/file?path=' + encodeURIComponent(path);
         const row = document.createElement('div');
         row.className = 'flex items-center gap-2 py-1';
         row.title = path;
@@ -591,12 +610,16 @@ document.getElementById('go').onclick = async () => {
           <span class="text-emerald-600 dark:text-emerald-400 flex-shrink-0">✓</span>
           <span class="truncate flex-1 text-slate-700 dark:text-slate-300"></span>
           <a class="px-2 py-1 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1 flex-shrink-0 no-underline"
-             href="/file?path=${encodeURIComponent(path)}" download>
+             href="${href}" download>
             <span class="material-symbols-outlined text-sm">download</span>
             Save here
           </a>`;
         row.querySelector('.truncate').textContent = fname;
         filesEl.appendChild(row);
+        if (autoSave) {
+          const delay = (i - lastFiles) * 600;
+          setTimeout(() => triggerDownload(href, fname), delay);
+        }
       }
       lastFiles = s.files.length;
       filesEl.scrollTop = filesEl.scrollHeight;
