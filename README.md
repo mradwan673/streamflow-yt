@@ -45,7 +45,31 @@ ngrok config add-authtoken <your-token>
 ngrok http 8765
 ```
 
+## Run in Docker
+
+```bash
+docker build -t streamflow .
+docker run --rm -p 8765:10000 -v $(pwd)/downloads:/data streamflow
+# open http://localhost:8765
+```
+
+## Deploy to Render (free tier)
+
+1. Push this repo to your own GitHub.
+2. https://dashboard.render.com → **New → Web Service** → connect the repo.
+3. Pick **Docker** as the runtime, **Free** plan, leave the rest default. Deploy.
+4. Wait ~5 minutes; you get a public `https://<name>.onrender.com` URL.
+
+## Configuration (env vars)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | Bind address. Set to `0.0.0.0` for cloud. |
+| `PORT` | `8765` | Listen port. Render sets this to `10000`. |
+| `STREAMFLOW_DIR` | `~/Downloads` | Folder where files are saved. Folder picker is restricted to inside this dir. |
+
 ## Notes
 
-- Files always save to a folder under your home directory.
-- Only download content you have rights to. YouTube's ToS prohibits downloading otherwise.
+- Files always save inside `STREAMFLOW_DIR`.
+- Only download content you have rights to. Each site's ToS still applies.
+- Cloud IPs (Render, Vercel, Fly, etc.) get blocked by YouTube quickly. For non-YouTube sites this is fine; for YouTube specifically, run locally or upload a fresh `cookies.txt` periodically.

@@ -14,10 +14,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 
-PORT = 8765
+HOST = os.environ.get("HOST", "127.0.0.1")
+PORT = int(os.environ.get("PORT", "8765"))
 HOME = Path.home()
-DEFAULT_DIR = HOME / "Downloads"
-DEFAULT_DIR.mkdir(exist_ok=True)
+BASE_DIR = Path(os.environ.get("STREAMFLOW_DIR", str(HOME / "Downloads"))).expanduser().resolve()
+BASE_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_DIR = BASE_DIR
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
@@ -43,9 +45,9 @@ def title_from_filename(path_str: str) -> str:
 
 def safe_path(raw: str) -> Path:
     p = Path(raw).expanduser().resolve()
-    home = HOME.resolve()
-    if p != home and home not in p.parents:
-        raise ValueError("path must be inside your home folder")
+    base = BASE_DIR.resolve()
+    if p != base and base not in p.parents:
+        raise ValueError("path must be inside the configured base folder")
     return p
 
 
@@ -805,9 +807,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Video downloader running at http://127.0.0.1:{PORT}")
-    print(f"Default save folder: {DEFAULT_DIR}")
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"Video downloader running at http://{HOST}:{PORT}")
+    print(f"Base folder: {BASE_DIR}")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
