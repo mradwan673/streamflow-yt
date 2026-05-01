@@ -1,7 +1,7 @@
-# StreamFlow — local YouTube downloader
+# StreamFlow — local video downloader
 
 A tiny self-hosted web UI on top of [yt-dlp](https://github.com/yt-dlp/yt-dlp).
-Paste a YouTube URL, pick format/quality/folder, watch the progress bar.
+Paste a video URL from any of yt-dlp's [1800+ supported sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) — YouTube, Vimeo, TikTok, X, SoundCloud, and so on — pick format/quality/folder, watch the progress bar.
 
 ## Features
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tiny local YouTube downloader. Single video or playlist, with progress."""
+"""Tiny local video downloader. Single video or playlist, with progress."""
 import json
 import os
 import pty
@@ -199,7 +199,7 @@ INDEX_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>StreamFlow — YouTube Downloader</title>
+<title>StreamFlow — Video Downloader</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -278,8 +278,8 @@ INDEX_HTML = r"""<!doctype html>
     <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 mb-4 border border-blue-100 dark:border-blue-500/20">
       <span class="material-symbols-outlined filled text-3xl">play_circle</span>
     </div>
-    <h1 class="text-[32px] leading-tight font-bold mb-1">YouTube Downloader</h1>
-    <p class="text-slate-500 dark:text-slate-400">Download videos and playlists in pristine quality.</p>
+    <h1 class="text-[32px] leading-tight font-bold mb-1">Video Downloader</h1>
+    <p class="text-slate-500 dark:text-slate-400">Works with YouTube, Vimeo, TikTok, X, SoundCloud and 1800+ more.</p>
   </div>
 
   <!-- Card: type + URL -->
@@ -294,7 +294,7 @@ INDEX_HTML = r"""<!doctype html>
     <label class="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">Video URL</label>
     <div class="input-glow rounded-lg flex items-center gap-2 px-3 h-14 bg-white dark:bg-[#1d1f27] border border-slate-300 dark:border-[#424754] transition">
       <span class="material-symbols-outlined text-slate-400">link</span>
-      <input id="url" type="url" placeholder="Paste YouTube link here..."
+      <input id="url" type="url" placeholder="Paste video link here..."
         class="flex-1 bg-transparent outline-none text-slate-800 dark:text-slate-100 placeholder:text-slate-400 text-base">
     </div>
   </div>
@@ -340,7 +340,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="sm:col-span-2">
         <label class="block text-sm mb-2 text-slate-600 dark:text-slate-400 flex items-center gap-1">
           Sign-in cookies
-          <span class="text-xs text-slate-400" title="Bypasses YouTube's bot check by reading cookies from your browser">(needed when YouTube asks to sign in)</span>
+          <span class="text-xs text-slate-400" title="Reads cookies from your browser so the site recognises you as signed in">(use when the site asks you to sign in)</span>
         </label>
         <div class="select-wrap">
           <select id="browser" class="w-full bg-white dark:bg-[#1d1f27] border border-slate-300 dark:border-[#424754] rounded-lg h-12 px-4 outline-none focus:border-blue-500 transition cursor-pointer">
@@ -692,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"YouTube downloader running at http://127.0.0.1:{PORT}")
+    print(f"Video downloader running at http://127.0.0.1:{PORT}")
     print(f"Default save folder: {DEFAULT_DIR}")
     print("Press Ctrl+C to stop.")
     try:
