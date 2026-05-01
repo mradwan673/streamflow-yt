@@ -9,7 +9,7 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 PORT = 8765
 HOME = Path.home()
@@ -20,7 +20,10 @@ JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
 
 DOWNLOAD_PROG_RE = re.compile(
-    r"^\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+~?\s*\S+\s+at\s+(\S+)\s+ETA\s+(\S+)"
+    r"^\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+~?\s*\S+\s+at\s+(.+?)\s+ETA\s+(\S+)"
+)
+DOWNLOAD_FRAG_RE = re.compile(
+    r"^\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+\S+\s+frag"
 )
 DESTINATION_RE = re.compile(r"^\[download\]\s+Destination:\s+(.+)$")
 MERGER_RE = re.compile(r'^\[Merger\]\s+Merging formats into\s+"(.+)"$')
@@ -123,8 +126,18 @@ def run_download(job_id: str, url: str, mode: str, kind: str, dest: Path, qualit
             with JOBS_LOCK:
                 cur = JOBS[job_id]["current"]
                 cur["percent"] = pct
-                cur["speed"] = speed_s
+                cur["speed"] = speed_s.strip()
                 cur["eta"] = eta_s
+            return
+
+        m = DOWNLOAD_FRAG_RE.match(line)
+        if m:
+            try:
+                pct = float(m.group(1))
+            except ValueError:
+                pct = 0.0
+            with JOBS_LOCK:
+                JOBS[job_id]["current"]["percent"] = pct
             return
 
         m = DESTINATION_RE.match(line) or MERGER_RE.match(line)
@@ -361,15 +374,20 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 
   <!-- Card: save path -->
-  <div class="card rounded-xl p-4 mb-4 flex items-center justify-between gap-3">
-    <div class="flex items-center gap-3 min-w-0 flex-1">
-      <span class="material-symbols-outlined text-slate-400 flex-shrink-0">folder_open</span>
-      <div class="min-w-0">
-        <div class="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold mb-0.5">Save to</div>
-        <div id="dest" class="text-sm font-mono truncate text-slate-700 dark:text-slate-200"></div>
+  <div class="card rounded-xl p-4 mb-4">
+    <div class="flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3 min-w-0 flex-1">
+        <span class="material-symbols-outlined text-slate-400 flex-shrink-0">folder_open</span>
+        <div class="min-w-0">
+          <div class="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold mb-0.5">Save on server</div>
+          <div id="dest" class="text-sm font-mono truncate text-slate-700 dark:text-slate-200"></div>
+        </div>
       </div>
+      <button id="pick" class="px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-white/5 rounded-md border border-slate-200 dark:border-[#424754] flex-shrink-0 transition">Change</button>
     </div>
-    <button id="pick" class="px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-white/5 rounded-md border border-slate-200 dark:border-[#424754] flex-shrink-0 transition">Change</button>
+    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+      The file always lands in this folder on the host machine. After download finishes, tap <strong>Save here</strong> next to the file to copy it to <em>this device</em>.
+    </p>
   </div>
 
   <!-- Action -->
@@ -564,10 +582,21 @@ document.getElementById('go').onclick = async () => {
     }
     if (s.files && s.files.length > lastFiles) {
       for (let i = lastFiles; i < s.files.length; i++) {
-        const d = document.createElement('div');
-        d.className = 'truncate text-emerald-600 dark:text-emerald-400';
-        d.textContent = '✓ ' + s.files[i];
-        filesEl.appendChild(d);
+        const path = s.files[i];
+        const fname = path.split('/').pop();
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 py-1';
+        row.title = path;
+        row.innerHTML = `
+          <span class="text-emerald-600 dark:text-emerald-400 flex-shrink-0">✓</span>
+          <span class="truncate flex-1 text-slate-700 dark:text-slate-300"></span>
+          <a class="px-2 py-1 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1 flex-shrink-0 no-underline"
+             href="/file?path=${encodeURIComponent(path)}" download>
+            <span class="material-symbols-outlined text-sm">download</span>
+            Save here
+          </a>`;
+        row.querySelector('.truncate').textContent = fname;
+        filesEl.appendChild(row);
       }
       lastFiles = s.files.length;
       filesEl.scrollTop = filesEl.scrollHeight;
@@ -611,7 +640,32 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, code: int, obj) -> None:
-        self._send(code, json.dumps(obj).encode(), "application/json")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        body = json.dumps(obj).encode()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, path: Path) -> None:
+        size = path.stat().st_size
+        encoded = quote(path.name)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(64 * 1024)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
@@ -624,6 +678,16 @@ class Handler(BaseHTTPRequestHandler):
                 job = JOBS.get(jid)
                 snapshot = json.loads(json.dumps(job)) if job else {"status": "missing"}
             self._json(200, snapshot)
+        elif self.path.startswith("/file"):
+            qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            raw = (qs.get("path") or [""])[0]
+            try:
+                p = safe_path(raw)
+                if not p.is_file():
+                    raise ValueError("not a file")
+                self._send_file(p)
+            except Exception as e:
+                self._json(404, {"error": str(e)})
         elif self.path.startswith("/list"):
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             raw = (qs.get("path") or [str(DEFAULT_DIR)])[0]
