@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Tiny local video downloader. Single video or playlist, with progress."""
+import fcntl
 import json
 import os
 import pty
 import re
+import struct
 import subprocess
+import termios
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -159,13 +162,25 @@ def run_download(job_id: str, url: str, mode: str, kind: str, dest: Path, qualit
 
     master_fd, slave_fd = pty.openpty()
     try:
+        try:
+            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 120, 0, 0))
+        except OSError:
+            pass
         proc = subprocess.Popen(
             cmd,
             stdout=slave_fd,
             stderr=slave_fd,
             stdin=subprocess.DEVNULL,
             close_fds=True,
-            env={**os.environ, "HTTP_PROXY": "", "HTTPS_PROXY": "", "http_proxy": "", "https_proxy": ""},
+            env={
+                **os.environ,
+                "HTTP_PROXY": "",
+                "HTTPS_PROXY": "",
+                "http_proxy": "",
+                "https_proxy": "",
+                "PYTHONUNBUFFERED": "1",
+                "TERM": "xterm",
+            },
         )
         os.close(slave_fd)
 
@@ -390,9 +405,11 @@ INDEX_HTML = r"""<!doctype html>
         class="w-4 h-4 rounded border-slate-300 dark:border-[#424754] text-blue-600 focus:ring-blue-500">
       <span>Auto-save to <strong>this device</strong> when the file is ready</span>
     </label>
-    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-      A copy still lives on the host machine. Turn this off if you only want it stored on the host.
-    </p>
+    <label class="mt-2 flex items-center gap-2 text-sm cursor-pointer select-none">
+      <input id="deleteAfter" type="checkbox"
+        class="w-4 h-4 rounded border-slate-300 dark:border-[#424754] text-blue-600 focus:ring-blue-500">
+      <span>Delete server copy after this device saves it <span class="text-xs text-slate-500">(saves disk on the host)</span></span>
+    </label>
   </div>
 
   <!-- Action -->
@@ -599,10 +616,12 @@ document.getElementById('go').onclick = async () => {
     }
     if (s.files && s.files.length > lastFiles) {
       const autoSave = document.getElementById('autoSave').checked;
+      const deleteAfter = document.getElementById('deleteAfter').checked;
       for (let i = lastFiles; i < s.files.length; i++) {
         const path = s.files[i];
         const fname = path.split('/').pop();
-        const href = '/file?path=' + encodeURIComponent(path);
+        const baseHref = '/file?path=' + encodeURIComponent(path);
+        const href = baseHref + (autoSave && deleteAfter ? '&delete=1' : '');
         const row = document.createElement('div');
         row.className = 'flex items-center gap-2 py-1';
         row.title = path;
@@ -671,7 +690,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, path: Path) -> None:
+    def _send_file(self, path: Path, delete_after: bool = False) -> None:
         size = path.stat().st_size
         encoded = quote(path.name)
         self.send_response(200)
@@ -680,6 +699,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded}")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        sent = 0
         with open(path, "rb") as f:
             while True:
                 chunk = f.read(64 * 1024)
@@ -687,8 +707,14 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 try:
                     self.wfile.write(chunk)
+                    sent += len(chunk)
                 except (BrokenPipeError, ConnectionResetError):
                     return
+        if delete_after and sent == size:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
@@ -704,11 +730,12 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/file"):
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             raw = (qs.get("path") or [""])[0]
+            delete_after = (qs.get("delete") or ["0"])[0] == "1"
             try:
                 p = safe_path(raw)
                 if not p.is_file():
                     raise ValueError("not a file")
-                self._send_file(p)
+                self._send_file(p, delete_after=delete_after)
             except Exception as e:
                 self._json(404, {"error": str(e)})
         elif self.path.startswith("/list"):
