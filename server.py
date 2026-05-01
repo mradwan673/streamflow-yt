@@ -20,6 +20,8 @@ HOME = Path.home()
 BASE_DIR = Path(os.environ.get("STREAMFLOW_DIR", str(HOME / "Downloads"))).expanduser().resolve()
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_DIR = BASE_DIR
+COOKIES_FILE = BASE_DIR / ".cookies.txt"
+MAX_COOKIES_SIZE = 5 * 1024 * 1024
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
@@ -34,6 +36,10 @@ DESTINATION_RE = re.compile(r"^\[download\]\s+Destination:\s+(.+)$")
 MERGER_RE = re.compile(r'^\[Merger\]\s+Merging formats into\s+"(.+)"$')
 PLAYLIST_ITEM_RE = re.compile(r"^\[download\]\s+Downloading item (\d+) of (\d+)")
 PLAYLIST_VIDEO_RE = re.compile(r"^\[download\]\s+Downloading video (\d+) of (\d+)")
+BOT_BLOCK_RE = re.compile(
+    r"sign in to confirm|not a bot|cookies-from-browser|http error 403",
+    re.IGNORECASE,
+)
 
 
 def title_from_filename(path_str: str) -> str:
@@ -58,7 +64,18 @@ def new_job() -> dict:
         "current": {"title": "", "percent": 0.0, "speed": "", "eta": ""},
         "playlist": {"index": 0, "count": 0},
         "files": [],
+        "needs_cookies": False,
     }
+
+
+def is_valid_cookies_txt(text: str) -> bool:
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if len(line.split("\t")) >= 7:
+            return True
+    return False
 
 
 VIDEO_QUALITIES = {"best", "2160", "1440", "1080", "720", "480", "360"}
@@ -95,7 +112,9 @@ def run_download(job_id: str, url: str, mode: str, kind: str, dest: Path, qualit
         list_args = ["--no-playlist"]
 
     cookie_args = []
-    if browser in BROWSERS and browser != "none":
+    if COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0:
+        cookie_args = ["--cookies", str(COOKIES_FILE)]
+    elif browser in BROWSERS and browser != "none":
         cookie_args = ["--cookies-from-browser", browser]
 
     cmd = [
@@ -158,6 +177,10 @@ def run_download(job_id: str, url: str, mode: str, kind: str, dest: Path, qualit
                 JOBS[job_id]["playlist"]["index"] = int(m.group(1))
                 JOBS[job_id]["playlist"]["count"] = int(m.group(2))
             return
+
+        if BOT_BLOCK_RE.search(line):
+            with JOBS_LOCK:
+                JOBS[job_id]["needs_cookies"] = True
 
         with JOBS_LOCK:
             JOBS[job_id]["log"] = (JOBS[job_id]["log"] + line + "\n")[-8000:]
@@ -386,6 +409,11 @@ INDEX_HTML = r"""<!doctype html>
           </select>
           <span class="chev material-symbols-outlined">expand_more</span>
         </div>
+        <div id="cookieStatus" class="mt-2 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap">
+          <span id="cookieStatusText">No cookies file uploaded.</span>
+          <button id="openCookies" class="text-blue-600 dark:text-blue-400 hover:underline">Upload cookies.txt</button>
+          <button id="deleteCookies" class="text-red-600 dark:text-red-400 hover:underline hidden">Delete</button>
+        </div>
       </div>
     </div>
   </div>
@@ -424,6 +452,47 @@ INDEX_HTML = r"""<!doctype html>
   <div id="out"></div>
 </main>
 
+<!-- Cookies modal -->
+<div id="cookieModal" class="fixed inset-0 bg-black/50 z-40 hidden items-center justify-center p-4">
+  <div class="bg-white dark:bg-[#1d1f27] text-slate-900 dark:text-slate-100 rounded-2xl w-full max-w-lg flex flex-col p-5 gap-3 border border-slate-200 dark:border-white/10 shadow-2xl">
+    <div class="flex items-start gap-3">
+      <span class="material-symbols-outlined text-amber-500 text-3xl flex-shrink-0">shield_lock</span>
+      <div>
+        <h3 class="font-semibold text-lg" id="cookieTitle">Site needs sign-in cookies</h3>
+        <p id="cookieSubtitle" class="text-sm text-slate-600 dark:text-slate-400 mt-1">
+          The site flagged this server as a bot. Upload a fresh <code class="font-mono text-xs px-1 py-0.5 bg-slate-100 dark:bg-white/10 rounded">cookies.txt</code> exported from a browser where you're signed in.
+        </p>
+      </div>
+    </div>
+
+    <div class="bg-slate-50 dark:bg-white/5 rounded-lg p-3 text-xs text-slate-600 dark:text-slate-400 space-y-1">
+      <div class="font-semibold text-slate-700 dark:text-slate-300">How to get the file:</div>
+      <ol class="list-decimal pl-4 space-y-0.5">
+        <li>Install
+          <a class="text-blue-600 dark:text-blue-400 hover:underline" href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener">Get cookies.txt LOCALLY</a>
+          (Chrome) or
+          <a class="text-blue-600 dark:text-blue-400 hover:underline" href="https://addons.mozilla.org/firefox/addon/cookies-txt/" target="_blank" rel="noopener">cookies.txt (Firefox)</a>.
+        </li>
+        <li>Sign in to the site (e.g. youtube.com), open the extension, click <strong>Export</strong>.</li>
+        <li>Drop the downloaded <code class="font-mono">cookies.txt</code> below.</li>
+      </ol>
+    </div>
+
+    <label id="cookieDrop" class="block border-2 border-dashed border-slate-300 dark:border-[#424754] rounded-lg p-6 text-center cursor-pointer hover:border-blue-500 transition">
+      <input id="cookieFile" type="file" accept=".txt,text/plain" class="hidden">
+      <span class="material-symbols-outlined text-4xl text-slate-400 block mb-1">upload_file</span>
+      <span class="text-sm">Tap or drag <code class="font-mono">cookies.txt</code> here</span>
+    </label>
+
+    <div id="cookieMsg" class="text-sm hidden"></div>
+
+    <div class="flex justify-end gap-2">
+      <button id="cookieClose" class="px-4 py-2 rounded-md border border-slate-200 dark:border-[#424754] hover:bg-slate-50 dark:hover:bg-white/5 text-sm">Close</button>
+      <button id="cookieRetry" class="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium hidden">Retry download</button>
+    </div>
+  </div>
+</div>
+
 <!-- Folder picker modal -->
 <div id="modal" class="fixed inset-0 bg-black/50 z-40 hidden items-center justify-center p-4">
   <div class="bg-white dark:bg-[#1d1f27] text-slate-900 dark:text-slate-100 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col p-4 gap-3 border border-slate-200 dark:border-white/10 shadow-2xl">
@@ -448,6 +517,90 @@ INDEX_HTML = r"""<!doctype html>
 </div>
 
 <script>
+// ----- cookies -----
+let lastJobParams = null;
+
+async function refreshCookieStatus() {
+  try {
+    const r = await fetch('/cookies').then(x => x.json());
+    const txt = document.getElementById('cookieStatusText');
+    const del = document.getElementById('deleteCookies');
+    if (r.uploaded) {
+      const date = new Date(r.mtime * 1000).toLocaleString();
+      txt.innerHTML = `<span class="text-emerald-600 dark:text-emerald-400">✓ Cookies uploaded</span> · ${(r.size/1024).toFixed(1)} KB · ${date}`;
+      del.classList.remove('hidden');
+    } else {
+      txt.textContent = 'No cookies file uploaded.';
+      del.classList.add('hidden');
+    }
+  } catch (_) {}
+}
+
+function openCookieModal(blocked) {
+  const modal = document.getElementById('cookieModal');
+  const title = document.getElementById('cookieTitle');
+  const sub = document.getElementById('cookieSubtitle');
+  const retry = document.getElementById('cookieRetry');
+  const msg = document.getElementById('cookieMsg');
+  msg.classList.add('hidden'); msg.textContent = '';
+  if (blocked) {
+    title.textContent = 'Site needs sign-in cookies';
+    sub.innerHTML = "The site flagged this server as a bot. Upload a fresh <code class='font-mono text-xs px-1 py-0.5 bg-slate-100 dark:bg-white/10 rounded'>cookies.txt</code> from a browser where you're signed in, then retry.";
+    retry.classList.toggle('hidden', !lastJobParams);
+  } else {
+    title.textContent = 'Upload cookies.txt';
+    sub.innerHTML = "Use this when a site asks you to sign in. The file is stored on the server and used for every download until you delete it.";
+    retry.classList.add('hidden');
+  }
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+}
+function closeCookieModal() {
+  const modal = document.getElementById('cookieModal');
+  modal.classList.add('hidden'); modal.classList.remove('flex');
+}
+
+async function uploadCookies(file) {
+  const msg = document.getElementById('cookieMsg');
+  msg.classList.remove('hidden');
+  msg.className = 'text-sm text-slate-500 dark:text-slate-400';
+  msg.textContent = 'Uploading…';
+  const text = await file.text();
+  const r = await fetch('/cookies', {method: 'POST', headers: {'Content-Type': 'text/plain'}, body: text});
+  const j = await r.json();
+  if (j.ok) {
+    msg.className = 'text-sm text-emerald-600 dark:text-emerald-400';
+    msg.textContent = `✓ Saved (${(j.size/1024).toFixed(1)} KB)`;
+    await refreshCookieStatus();
+    return true;
+  } else {
+    msg.className = 'text-sm text-red-600 dark:text-red-400';
+    msg.textContent = j.error || 'Upload failed.';
+    return false;
+  }
+}
+
+document.getElementById('openCookies').onclick = () => openCookieModal(false);
+document.getElementById('cookieClose').onclick = closeCookieModal;
+document.getElementById('deleteCookies').onclick = async () => {
+  if (!confirm('Delete the uploaded cookies file?')) return;
+  await fetch('/cookies', {method: 'DELETE'});
+  refreshCookieStatus();
+};
+document.getElementById('cookieFile').addEventListener('change', async (e) => {
+  if (e.target.files[0]) await uploadCookies(e.target.files[0]);
+});
+const cookieDrop = document.getElementById('cookieDrop');
+['dragenter','dragover'].forEach(t => cookieDrop.addEventListener(t, (e) => { e.preventDefault(); cookieDrop.classList.add('border-blue-500','bg-blue-50','dark:bg-blue-500/10'); }));
+['dragleave','drop'].forEach(t => cookieDrop.addEventListener(t, (e) => { e.preventDefault(); cookieDrop.classList.remove('border-blue-500','bg-blue-50','dark:bg-blue-500/10'); }));
+cookieDrop.addEventListener('drop', async (e) => {
+  if (e.dataTransfer.files[0]) await uploadCookies(e.dataTransfer.files[0]);
+});
+document.getElementById('cookieRetry').onclick = () => {
+  closeCookieModal();
+  if (lastJobParams) startDownload(lastJobParams);
+};
+refreshCookieStatus();
+
 // ----- helpers -----
 function triggerDownload(href, filename) {
   const a = document.createElement('a');
@@ -556,12 +709,17 @@ async function listDir() {
 }
 
 // ----- download -----
-document.getElementById('go').onclick = async () => {
+document.getElementById('go').onclick = () => {
   const url = document.getElementById('url').value.trim();
+  if (!url) { alert('Paste a URL first.'); return; }
   const mode = modeEl.value;
   const quality = (mode === 'audio') ? qAudio.value : qVideo.value;
   const browser = document.getElementById('browser').value;
-  if (!url) { alert('Paste a URL first.'); return; }
+  startDownload({url, mode, quality, browser, dest, kind});
+};
+
+async function startDownload(p) {
+  lastJobParams = p;
   const out = document.getElementById('out');
   const go = document.getElementById('go');
   go.disabled = true;
@@ -596,17 +754,22 @@ document.getElementById('go').onclick = async () => {
   const r = await fetch('/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: new URLSearchParams({url, mode, dest, kind, quality, browser}),
+    body: new URLSearchParams(p),
   });
   const j = await r.json();
   if (j.error) { log.textContent = j.error; go.disabled = false; return; }
   const job_id = j.job_id;
   let lastFiles = 0;
 
+  let cookiePromptShown = false;
   const poll = setInterval(async () => {
     const s = await fetch('/status?id=' + job_id).then(x => x.json());
     log.textContent = s.log || '';
     log.scrollTop = log.scrollHeight;
+    if (s.needs_cookies && !cookiePromptShown) {
+      cookiePromptShown = true;
+      openCookieModal(true);
+    }
     const c = s.current || {};
     bar.style.width = (c.percent || 0) + '%';
     pct.textContent = (c.percent || 0).toFixed(1) + '%';
@@ -665,7 +828,7 @@ document.getElementById('go').onclick = async () => {
       out.appendChild(div);
     }
   }, 700);
-};
+}
 </script>
 </body>
 </html>
@@ -740,6 +903,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_file(p, delete_after=delete_after)
             except Exception as e:
                 self._json(404, {"error": str(e)})
+        elif self.path == "/cookies":
+            if COOKIES_FILE.exists():
+                self._json(200, {
+                    "uploaded": True,
+                    "size": COOKIES_FILE.stat().st_size,
+                    "mtime": int(COOKIES_FILE.stat().st_mtime),
+                })
+            else:
+                self._json(200, {"uploaded": False})
         elif self.path.startswith("/list"):
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             raw = (qs.get("path") or [str(DEFAULT_DIR)])[0]
@@ -787,6 +959,16 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=run_download, args=(job_id, url, mode, kind, dest, quality, browser), daemon=True).start()
             self._json(200, {"job_id": job_id})
 
+        elif self.path == "/cookies":
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > MAX_COOKIES_SIZE:
+                self._json(413, {"error": f"file size must be 1..{MAX_COOKIES_SIZE} bytes"}); return
+            text = self.rfile.read(length).decode("utf-8", errors="replace")
+            if not is_valid_cookies_txt(text):
+                self._json(400, {"error": "doesn't look like a Netscape cookies.txt file"}); return
+            COOKIES_FILE.write_text(text)
+            self._json(200, {"ok": True, "size": len(text)})
+
         elif self.path == "/mkdir":
             parent_raw = (params.get("path") or [""])[0]
             name = (params.get("name") or [""])[0].strip()
@@ -802,6 +984,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "folder already exists"})
             except Exception as e:
                 self._json(400, {"error": str(e)})
+        else:
+            self._send(404, b"not found", "text/plain")
+
+
+    def do_DELETE(self):
+        if self.path == "/cookies":
+            try:
+                COOKIES_FILE.unlink()
+            except FileNotFoundError:
+                pass
+            self._json(200, {"ok": True})
         else:
             self._send(404, b"not found", "text/plain")
 
